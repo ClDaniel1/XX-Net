@@ -17,7 +17,7 @@
 # Then GAE_proxy local client will switch to range fetch mode.
 
 
-__version__ = '3.3.2'
+__version__ = '3.3.5'
 __password__ = ''
 __hostsdeny__ = ()
 #__hostsdeny__ = ('.youtube.com', '.youku.com', ".googlevideo.com")
@@ -132,7 +132,7 @@ def format_response(status, headers, content):
 
 
 def is_text_content_type(content_type):
-    mct, sct = content_type.split('/', 1)
+    mct, _, sct = content_type.partition('/')
     if mct == 'text':
         return True
     if mct == 'application':
@@ -144,19 +144,18 @@ def is_text_content_type(content_type):
     return False
 
 
-def is_binary(data):
-    if data[:3] == '\xef\xbb\xbf':
-        # utf-8 text
-        return False
-    i = 0
-    for b in data:
-        if b > '\x7f':
+def is_deflate(data):
+    if len(data) > 1:
+        CMF, FLG = bytearray(data[:2])
+        if CMF & 0x0F == 8 and CMF & 0x80 == 0 and ((CMF << 8) + FLG) % 31 == 0:
             return True
-        if b == '\n' and i > 4:
-            break
-        i += 1
-        if i > 32:
-            break
+    if len(data) > 0:
+        try:
+            decompressor = zlib.decompressobj(-zlib.MAX_WBITS)
+            decompressor.decompress(data[:1024])
+            return decompressor.unused_data == ''
+        except:
+            return False
     return False
 
 
@@ -353,7 +352,6 @@ def application(environ, start_response):
                 url,
                 response)
 
-            allow_truncated = True
             m = re.search(r'=\s*(\d+)-', headers.get('Range')
                           or headers.get('range') or '')
             if m is None:
@@ -406,10 +404,10 @@ def application(environ, start_response):
             maxsize - 1, len(data))
         data = data[:maxsize]
     if 'gzip' in accept_encoding:
-        if (status_code == 200 and
+        if (data and status_code == 200 and
                 content_encoding == '' and
                 is_text_content_type(content_type) and
-                is_binary(data)):
+                is_deflate(data)):
             # ignore wrong "Content-Type"
             type = guess_type(url)[0]
             if type is None or is_text_content_type(type):
